@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta http-equiv=X-UA-Compatible content="ie=edge"><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=author content="Ecrose"><meta name=keywords content="Ecrose,Blog,技术"><meta name=description content="Ecrose个人博客，技术分享，数据库，DevOps"><meta name=generator content="Hugo 0.123.7"><title>vps服务器自动备份实践 🌟 Ecrose's Blog</title>
+<!doctype html><html><head><meta http-equiv=X-UA-Compatible content="ie=edge"><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=author content="Ecrose"><meta name=keywords content="Ecrose,Blog,技术"><meta name=description content="Ecrose个人博客，技术分享，数据库，DevOps"><meta name=generator content="Hugo 0.124.0"><title>vps服务器自动备份实践 🌟 Ecrose's Blog</title>
 <meta property="og:title" content="vps服务器自动备份实践"><meta property="og:description" content="国内云厂商 以腾讯云为例可以结合云函数调用服务器提供商的快照 api 实现定期自动备份。 其他 VPS 前者不一定所有厂商都有，而且不一定免费。具体使用 restic + rclone 来"><meta property="og:type" content="article"><meta property="og:url" content="/posts/202403022032/"><meta property="article:section" content="posts"><meta property="article:published_time" content="2024-03-02T20:32:54+08:00"><meta property="article:modified_time" content="2024-03-02T20:32:54+08:00"><meta name=twitter:card content="summary"><meta name=twitter:title content="vps服务器自动备份实践"><meta name=twitter:description content="国内云厂商 以腾讯云为例可以结合云函数调用服务器提供商的快照 api 实现定期自动备份。 其他 VPS 前者不一定所有厂商都有，而且不一定免费。具体使用 restic + rclone 来"><link rel=stylesheet href=/assets/css/style.min.699f46622e3574a7f9ecca4c5877067845fe89ffcd9c4335df2dff23ddae215e.css integrity="sha256-aZ9GYi41dKf57MpMWHcGeEX+if/NnEM13y3/I92uIV4="><script src=/assets/js/main.min.182da266209851bc7c828aa7377f98f914e1e76c8decdd53a6cbe9bffea92cde.js integrity="sha256-GC2iZiCYUbx8goqnN3+Y+RTh52yN7N1Tpsvpv/6pLN4="></script></head><body><header class="header-container layout-block layout-padding"><div class="header-inner content-padding-large soft-size--large soft-style--box"><div class=header-logo><a href=/><h1>Ecrose's Blog</h1></a></div><nav class=header-nav><div class=header-nav--btn><div class=btn-item></div><div class=btn-item></div><div class=btn-item></div></div><div class=header-nav--list><div><a class="list-item soft-size--small soft-style--hover soft-style--active" href=/ title>🏠HOME</a>
 <a class="list-item soft-size--small soft-style--hover soft-style--active" href=/posts title>📑POSTS</a>
 <a class="list-item soft-size--small soft-style--hover soft-style--active" href=/message title>👀MESSAGE</a>
@@ -78,14 +78,52 @@ Rclone 在配置文件中保存密码时，使用的是 NaCl (Networking and Cry
 </span></span><span style=display:flex><span>restic -r rclone:OneDrive:backup restore &lt;snapshot-id&gt; --target /path/to/restore --include <span style=color:#e6db74>&#34;/path/to/large_directory/&#34;</span> --exclude <span style=color:#e6db74>&#34;/path/to/large_directory/exclude_this_subdir&#34;</span>
 </span></span></code></pre></div><h5 id=恢复备份时的安全检查>恢复备份时的安全检查</h5><p>当使用 <code>restic restore</code> 命令恢复数据时，添加 <code>--verify</code> 选项将指示 <code>Restic</code> 在恢复每个文件后立即对其内容进行校验。这意味着 <code>Restic</code> 会比较文件的内容哈希值与仓库中记录的哈希值，以确保它们完全匹配。</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell><span style=display:flex><span>restic -r rclone:OneDrive:backup restore &lt;snapshot-id&gt; --target /path/to/restore --verify
 </span></span></code></pre></div><h4 id=常见异常处理>常见异常处理</h4><h5 id=锁定机制>锁定机制</h5><p>Restic 使用锁定机制来确保备份仓库的数据一致性和完整性。在进行备份、恢复或维护操作时，Restic 会在备份仓库中创建一个特殊的锁文件。这个锁文件包含了操作的类型、开始时间以及操作者的信息。如果存在一个活动锁，Restic 会阻止其他可能会影响数据一致性的操作执行，直到该锁被释放。</p><ul><li><strong>独占锁：</strong> 用于备份和修剪操作，确保在这些操作执行期间，没有其他操作可以修改仓库数据。</li><li><strong>共享锁：</strong> 允许多个读取操作同时进行，例如列出快照或检查仓库，但阻止写入操作。</li></ul><p>在命令行中使用 Restic 时，锁定机制是自动管理的。用户不需要手动创建或释放锁。但是，如果操作被非正常终止（如进程崩溃或网络断开），可能会留下孤立的锁文件。Restic 提供了 <code>unlock</code> 命令来清理这些孤立的锁：</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell><span style=display:flex><span>restic -r /path/to/repository unlock
-</span></span></code></pre></div><h3 id=实践结合-restic-与-rclone-自动备份脚本>实践结合 Restic 与 Rclone 自动备份脚本</h3><h4 id=步骤-1-创建配置文件>步骤 1: 创建配置文件</h4><p>创建一个配置文件 <code>backup_config.conf</code>，在其中定义备份仓库、密码文件、备份路径、排除规则文件以及日志文件路径。例如放置于 <code>/usr/local/bin/restic_backup</code></p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-yaml data-lang=yaml><span style=display:flex><span><span style=color:#75715e># backup_config.conf</span>
+</span></span></code></pre></div><h3 id=实践结合-restic-与-rclone-自动备份及备份状态推送>实践结合 Restic 与 Rclone 自动备份及备份状态推送</h3><h4 id=步骤-1-创建配置文件>步骤 1: 创建配置文件</h4><p>创建一个配置文件 <code>backup_config.conf</code>，在其中定义备份仓库、密码文件、备份路径、排除规则文件以及日志文件路径。例如放置于 <code>/usr/local/bin/restic_backup</code></p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-yaml data-lang=yaml><span style=display:flex><span><span style=color:#75715e># backup_config.conf</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># The repository location for restic backups. This is specified using the rclone backend syntax.</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Format: &#34;rclone:&lt;rclone remote name&gt;:&lt;path within the remote&gt;&#34;</span>
 </span></span><span style=display:flex><span><span style=color:#ae81ff>RESTIC_REPOSITORY=&#34;rclone:OneDrive:backup&#34;</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Path to the file containing the password for the restic repository. </span>
+</span></span><span style=display:flex><span><span style=color:#75715e># This file should be secured with appropriate permissions to prevent unauthorized access.</span>
+</span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span><span style=color:#ae81ff>PASSWORD_FILE=&#34;/usr/local/bin/restic_backup/restic_password_file&#34;</span>
-</span></span><span style=display:flex><span><span style=color:#ae81ff>FILES_FROM=&#34;/usr/local/bin/restic_backup/backup_paths.txt&#34;</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># File containing a list of paths to include in the backup. Each path should be on a separate line.</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># File containing patterns to exclude from the backup. Each pattern should be on a separate line.</span>
 </span></span><span style=display:flex><span><span style=color:#ae81ff>EXCLUDE_FILE=&#34;/usr/local/bin/restic_backup/exclude_rules.txt&#34;</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Path to the log file where backup operation details will be recorded.</span>
 </span></span><span style=display:flex><span><span style=color:#ae81ff>LOG_FILE=&#34;/var/log/restic_backup.log&#34;</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># A tag to assign to all snapshots created by this backup for easy identification and management.</span>
 </span></span><span style=display:flex><span><span style=color:#ae81ff>BACKUP_TAG=&#34;automated_backup&#34;</span>
-</span></span></code></pre></div><p>创建密码文件注意路径与 <code>PASSWORD_FILE</code> 参数对应</p><h4 id=步骤-2-创建相关文件>步骤 2: 创建相关文件</h4><p><strong>创建密码文件:</strong></p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell><span style=display:flex><span>echo <span style=color:#e6db74>&#34;your_restic_password&#34;</span> &gt; /usr/local/bin/restic_backup/restic_password_file
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># The number of most recent snapshots to keep. Older snapshots exceeding this count will be pruned.</span>
+</span></span><span style=display:flex><span><span style=color:#ae81ff>KEEP_SNAPSHOTS=5 </span> <span style=color:#75715e># Number of snapshots to retain</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Rclone performance optimization settings</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># The number of file transfers to run in parallel. Increasing this can improve transfer speeds,</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># especially for a large number of small files, assuming the bandwidth allows for it.</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># The default in rclone is 4 parallel transfers.</span>
+</span></span><span style=display:flex><span><span style=color:#ae81ff>RCLONE_TRANSFERS=10</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># The number of checkers to use. Checkers are used by rclone to determine if a file needs to be transferred.</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Increasing this number can speed up this checking process, which can be beneficial when dealing with</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># a large number of files. This setting helps in speeding up the comparison between source and destination.</span>
+</span></span><span style=display:flex><span><span style=color:#ae81ff>RCLONE_CHECKERS=20</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Telegram notification settings</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># TELEGRAM_TOKEN: The API token of your Telegram bot. Leave this empty if you do not wish to send Telegram notifications.</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># TELEGRAM_CHAT_ID: The chat ID where notifications will be sent. This can be a personal chat ID or a group chat ID.</span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Leave these empty to disable Telegram notifications.</span>
+</span></span><span style=display:flex><span><span style=color:#ae81ff>TELEGRAM_TOKEN=&#34;1111111223:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&#34;</span>
+</span></span><span style=display:flex><span><span style=color:#ae81ff>TELEGRAM_CHAT_ID=&#34;123433545&#34;</span>
+</span></span></code></pre></div><p>创建密码文件注意路径与 <code>PASSWORD_FILE</code> 参数对应
+可适当修改RCLONE_TRANSFERS和RCLONE_CHECKERS参数可提高在备份大量小文件时的性能。
+以及添加Telegram消息推送备份结果</p><h4 id=步骤-2-创建相关文件>步骤 2: 创建相关文件</h4><p><strong>创建密码文件:</strong></p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-shell data-lang=shell><span style=display:flex><span>echo <span style=color:#e6db74>&#34;your_restic_password&#34;</span> &gt; /usr/local/bin/restic_backup/restic_password_file
 </span></span><span style=display:flex><span><span style=color:#75715e># 设置文件权限</span>
 </span></span><span style=display:flex><span>chmod <span style=color:#ae81ff>600</span> /usr/local/bin/restic_backup/restic_password_file
 </span></span></code></pre></div><p><strong>创建备份路径文件:</strong></p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-txt data-lang=txt><span style=display:flex><span>/home
@@ -102,114 +140,155 @@ Rclone 在配置文件中保存密码时，使用的是 NaCl (Networking and Cry
 </span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span># 但保留特定的文件，如 .zshrc
 </span></span><span style=display:flex><span>!.zshrc
-</span></span></code></pre></div><h4 id=步骤-3-编写备份脚本>步骤 3: 编写备份脚本</h4><p>编写一个新的备份脚本 <code>restic_backup.sh</code>，使用配置文件，实现日志记录以及错误处理和重试机制，并在脚本结束时提供备份摘要。</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span><span style=color:#75715e>#!/bin/bash
+</span></span></code></pre></div><h4 id=步骤-3-编写备份脚本及清理脚本>步骤 3: 编写备份脚本及清理脚本</h4><p>编写一个新的备份脚本 <code>restic_backup.sh</code>，使用配置文件，实现日志记录以及错误处理和重试机制，并在脚本结束时提供备份摘要和推送备份结果。</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span><span style=color:#75715e>#!/bin/bash
 </span></span></span><span style=display:flex><span><span style=color:#75715e></span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span>source /usr/local/bin/restic_backup/backup_config.conf
 </span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Check for required commands</span>
+</span></span><span style=display:flex><span><span style=color:#66d9ef>for</span> cmd in restic curl hostname; <span style=color:#66d9ef>do</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> ! command -v $cmd &amp;&gt; /dev/null; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Error: Required command &#39;</span>$cmd<span style=color:#e6db74>&#39; not found. Exiting.&#34;</span>
+</span></span><span style=display:flex><span>        exit <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span><span style=color:#66d9ef>done</span>
 </span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>export RCLONE_TRANSFERS<span style=color:#f92672>=</span>$RCLONE_TRANSFERS
+</span></span><span style=display:flex><span>export RCLONE_CHECKERS<span style=color:#f92672>=</span>$RCLONE_CHECKERS
 </span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span>backup_success<span style=color:#f92672>=</span>true
 </span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Function to send Telegram notification</span>
+</span></span><span style=display:flex><span>send_telegram<span style=color:#f92672>()</span> <span style=color:#f92672>{</span>
+</span></span><span style=display:flex><span>    local message<span style=color:#f92672>=</span>$1
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> <span style=color:#f92672>[[</span> -z <span style=color:#e6db74>&#34;</span>$TELEGRAM_TOKEN<span style=color:#e6db74>&#34;</span> <span style=color:#f92672>||</span> -z <span style=color:#e6db74>&#34;</span>$TELEGRAM_CHAT_ID<span style=color:#e6db74>&#34;</span> <span style=color:#f92672>]]</span>; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Telegram token or chat ID not set. Skipping notification.&#34;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>return</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> ! curl -s -X POST https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage -d chat_id<span style=color:#f92672>=</span>$TELEGRAM_CHAT_ID -d text<span style=color:#f92672>=</span><span style=color:#e6db74>&#34;</span>$message<span style=color:#e6db74>&#34;</span> &gt; /dev/null; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Warning: Failed to send Telegram notification.&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span><span style=color:#f92672>}</span>
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Backup function with retry logic</span>
 </span></span><span style=display:flex><span>backup<span style=color:#f92672>()</span> <span style=color:#f92672>{</span>
+</span></span><span style=display:flex><span>    local retries<span style=color:#f92672>=</span><span style=color:#ae81ff>2</span>
+</span></span><span style=display:flex><span>    local delay<span style=color:#f92672>=</span><span style=color:#ae81ff>10</span>  <span style=color:#75715e># Initial retry delay in seconds</span>
+</span></span><span style=display:flex><span>    local attempt<span style=color:#f92672>=</span><span style=color:#ae81ff>0</span>
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>local retries<span style=color:#f92672>=</span><span style=color:#ae81ff>2</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>while</span> <span style=color:#f92672>[</span> $attempt -le $retries <span style=color:#f92672>]</span>; <span style=color:#66d9ef>do</span>
+</span></span><span style=display:flex><span>        local start_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +%s<span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Starting backup at </span>$start_time<span style=color:#e6db74>, attempt </span><span style=color:#66d9ef>$((</span>attempt+1<span style=color:#66d9ef>))</span><span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>local delay<span style=color:#f92672>=</span><span style=color:#ae81ff>10</span> <span style=color:#75715e># 初始重试延迟</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> backup --files-from <span style=color:#e6db74>&#34;</span>$FILES_FROM<span style=color:#e6db74>&#34;</span> --exclude-file<span style=color:#f92672>=</span><span style=color:#e6db74>&#34;</span>$EXCLUDE_FILE<span style=color:#e6db74>&#34;</span> --tag <span style=color:#e6db74>&#34;</span>$BACKUP_TAG<span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span> 2&gt;&amp;1; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>            local end_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +%s<span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>            echo <span style=color:#e6db74>&#34;Backup completed successfully at </span>$end_time<span style=color:#e6db74>. Duration: </span><span style=color:#66d9ef>$((</span>end_time <span style=color:#f92672>-</span> start_time<span style=color:#66d9ef>))</span><span style=color:#e6db74> seconds.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>return</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>else</span>
+</span></span><span style=display:flex><span>            local end_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +%s<span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>            echo <span style=color:#e6db74>&#34;Backup failed, attempt </span><span style=color:#66d9ef>$((</span>attempt+1<span style=color:#66d9ef>))</span><span style=color:#e6db74> at </span>$end_time<span style=color:#e6db74>. Check log </span>$LOG_FILE<span style=color:#e6db74> for details.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>            attempt<span style=color:#f92672>=</span><span style=color:#66d9ef>$((</span>attempt <span style=color:#f92672>+</span> <span style=color:#ae81ff>1</span><span style=color:#66d9ef>))</span>
+</span></span><span style=display:flex><span>            sleep $delay
+</span></span><span style=display:flex><span>            delay<span style=color:#f92672>=</span><span style=color:#66d9ef>$((</span>delay <span style=color:#f92672>*</span> <span style=color:#ae81ff>2</span><span style=color:#66d9ef>))</span>  <span style=color:#75715e># Exponential backoff</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>done</span>
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>local attempt<span style=color:#f92672>=</span><span style=color:#ae81ff>0</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>while</span> <span style=color:#f92672>[</span> $attempt -le $retries <span style=color:#f92672>]</span>; <span style=color:#66d9ef>do</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>local start_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +%s<span style=color:#66d9ef>)</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Starting backup at </span><span style=color:#66d9ef>$(</span>date<span style=color:#66d9ef>)</span><span style=color:#e6db74>, attempt </span><span style=color:#66d9ef>$((</span>attempt+1<span style=color:#66d9ef>))</span><span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>if</span> restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> backup --files-from <span style=color:#e6db74>&#34;</span>$FILES_FROM<span style=color:#e6db74>&#34;</span> --exclude-file<span style=color:#f92672>=</span><span style=color:#e6db74>&#34;</span>$EXCLUDE_FILE<span style=color:#e6db74>&#34;</span> --tag <span style=color:#e6db74>&#34;</span>$BACKUP_TAG<span style=color:#e6db74>&#34;</span> 2&gt;&gt;<span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>; <span style=color:#66d9ef>then</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>local end_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +%s<span style=color:#66d9ef>)</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Backup completed successfully. Duration: </span><span style=color:#66d9ef>$((</span>end_time <span style=color:#f92672>-</span> start_time<span style=color:#66d9ef>))</span><span style=color:#e6db74> seconds.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>return</span> <span style=color:#ae81ff>0</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>else</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>local end_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +%s<span style=color:#66d9ef>)</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Backup failed, attempt </span><span style=color:#66d9ef>$((</span>attempt+1<span style=color:#66d9ef>))</span><span style=color:#e6db74>. Duration: </span><span style=color:#66d9ef>$((</span>end_time <span style=color:#f92672>-</span> start_time<span style=color:#66d9ef>))</span><span style=color:#e6db74> seconds.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>attempt<span style=color:#f92672>=</span><span style=color:#66d9ef>$((</span>attempt <span style=color:#f92672>+</span> <span style=color:#ae81ff>1</span><span style=color:#66d9ef>))</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>sleep $delay
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>delay<span style=color:#f92672>=</span><span style=color:#66d9ef>$((</span>delay <span style=color:#f92672>*</span> <span style=color:#ae81ff>2</span><span style=color:#66d9ef>))</span> <span style=color:#75715e># 指数退避策略</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>fi</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>done</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Backup failed after </span>$retries<span style=color:#e6db74> retries.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>backup_success<span style=color:#f92672>=</span>false
-</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    echo <span style=color:#e6db74>&#34;Backup failed after </span>$retries<span style=color:#e6db74> retries at </span><span style=color:#66d9ef>$(</span>date +%Y-%m-%d<span style=color:#ae81ff>\ </span>%H:%M:%S<span style=color:#66d9ef>)</span><span style=color:#e6db74>.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>    backup_success<span style=color:#f92672>=</span>false
 </span></span><span style=display:flex><span><span style=color:#f92672>}</span>
 </span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Retrieve hostname and IP address</span>
+</span></span><span style=display:flex><span>HOSTNAME<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>hostname<span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>IP_ADDRESS<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>curl -s ip.sb<span style=color:#66d9ef>)</span>
 </span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># Function to summarize backup operation and send Telegram notification</span>
 </span></span><span style=display:flex><span>backup_summary<span style=color:#f92672>()</span> <span style=color:#f92672>{</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>if</span> $backup_success; <span style=color:#66d9ef>then</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;All backups completed successfully at </span><span style=color:#66d9ef>$(</span>date<span style=color:#66d9ef>)</span><span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>else</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;One or more backups failed at </span><span style=color:#66d9ef>$(</span>date<span style=color:#66d9ef>)</span><span style=color:#e6db74>, see log for details.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span><span style=color:#66d9ef>fi</span>
-</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    local end_time<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> $backup_success; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        local stats_output<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> stats | awk <span style=color:#e6db74>&#39;/Stats in restore-size mode:/,0&#39;</span><span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;All backups completed successfully at </span>$end_time<span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>        send_telegram <span style=color:#e6db74>&#34;🎉 Backup completed successfully at </span>$end_time<span style=color:#e6db74> 🎉
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🖥️ Hostname: </span>$HOSTNAME<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🌐 IP Address: </span>$IP_ADDRESS<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>💾 Repository: </span>$RESTIC_REPOSITORY<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🤖 Repository Stats: 
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74></span>$stats_output<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>else</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;One or more backups failed at </span>$end_time<span style=color:#e6db74>, see log </span>$LOG_FILE<span style=color:#e6db74> for details.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>        send_telegram <span style=color:#e6db74>&#34;❌ Backup failed at </span>$end_time<span style=color:#e6db74> ❌
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🖥️ Hostname: </span>$HOSTNAME<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🌐 IP Address: </span>$IP_ADDRESS<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>💾 Repository: </span>$RESTIC_REPOSITORY<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>Check log </span>$LOG_FILE<span style=color:#e6db74> for details.&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
 </span></span><span style=display:flex><span><span style=color:#f92672>}</span>
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Starting backup process at </span><span style=color:#66d9ef>$(</span>date<span style=color:#66d9ef>)</span><span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Starting backup process at </span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span><span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
 </span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span>backup
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span><span style=color:#66d9ef>if</span> ! $backup_success; <span style=color:#66d9ef>then</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Performing detailed check due to previous failures...&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> check &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span> 2&gt;&amp;<span style=color:#ae81ff>1</span>
-</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    echo <span style=color:#e6db74>&#34;Performing detailed check due to previous failures...&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>    restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> check &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span> 2&gt;&amp;<span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>    send_telegram <span style=color:#e6db74>&#34;Restic repository check performed due to backup failure. Check log </span>$LOG_FILE<span style=color:#e6db74> for details.&#34;</span>
 </span></span><span style=display:flex><span><span style=color:#66d9ef>else</span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>echo <span style=color:#e6db74>&#34;Skipping detailed check as all backups were successful.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
-</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    echo <span style=color:#e6db74>&#34;Skipping detailed check as all backups were successful.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
 </span></span><span style=display:flex><span><span style=color:#66d9ef>fi</span>
 </span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
-</span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span>backup_summary
-</span></span></code></pre></div><p>赋予脚本执行权限：<code>chmod +x /path/to/restic_backup.sh</code>。</p><h4 id=步骤-4-配置定时任务>步骤 4: 配置定时任务</h4><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span>crontab -e
-</span></span></code></pre></div><p>在编辑器中，添加一行以定义新的计划任务。以下是一些常见的时间设置示例：</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span><span style=color:#75715e># 每周一凌晨 1 点执行备份</span>
-</span></span><span style=display:flex><span><span style=color:#ae81ff>0</span> <span style=color:#ae81ff>1</span> * * <span style=color:#ae81ff>1</span> /bin/bash /path/to/your_backup_script.sh
+</span></span></code></pre></div><p>赋予脚本执行权限：<code>chmod +x /path/to/restic_backup.sh</code>。</p><p>编写清理快照脚本,具体要保留的快照数量可以在配置文件中自行修改，注意具有不同的路径或标签，它们被视为不同的备份集合，会单独计算保存的快照数量。</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span><span style=color:#75715e>#!/bin/bash
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span>
+</span></span><span style=display:flex><span>source /usr/local/bin/restic_backup/backup_config.conf
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>HOSTNAME<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>hostname<span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>IP_ADDRESS<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>curl -s ip.sb<span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>send_telegram<span style=color:#f92672>()</span> <span style=color:#f92672>{</span>
+</span></span><span style=display:flex><span>    local message<span style=color:#f92672>=</span>$1
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> <span style=color:#f92672>[[</span> -z <span style=color:#e6db74>&#34;</span>$TELEGRAM_TOKEN<span style=color:#e6db74>&#34;</span> <span style=color:#f92672>||</span> -z <span style=color:#e6db74>&#34;</span>$TELEGRAM_CHAT_ID<span style=color:#e6db74>&#34;</span> <span style=color:#f92672>]]</span>; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Telegram token or chat ID not set. Skipping notification.&#34;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>return</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> ! curl -s -X POST https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage -d chat_id<span style=color:#f92672>=</span>$TELEGRAM_CHAT_ID -d text<span style=color:#f92672>=</span><span style=color:#e6db74>&#34;</span>$message<span style=color:#e6db74>&#34;</span> &gt; /dev/null; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Warning: Failed to send Telegram notification.&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span><span style=color:#f92672>}</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>cleanup_snapshots<span style=color:#f92672>()</span> <span style=color:#f92672>{</span>
+</span></span><span style=display:flex><span>    echo <span style=color:#e6db74>&#34;Starting cleanup process at </span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span><span style=color:#e6db74>&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>    
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> forget --keep-last <span style=color:#e6db74>&#34;</span>$KEEP_SNAPSHOTS<span style=color:#e6db74>&#34;</span> --prune 2&gt;&gt;<span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>; <span style=color:#66d9ef>then</span>
+</span></span><span style=display:flex><span>        local stats_output<span style=color:#f92672>=</span><span style=color:#66d9ef>$(</span>restic -r <span style=color:#e6db74>&#34;</span>$RESTIC_REPOSITORY<span style=color:#e6db74>&#34;</span> --password-file <span style=color:#e6db74>&#34;</span>$PASSWORD_FILE<span style=color:#e6db74>&#34;</span> stats | awk <span style=color:#e6db74>&#39;/Stats in restore-size mode:/,0&#39;</span><span style=color:#66d9ef>)</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Cleanup completed successfully at </span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span><span style=color:#e6db74>. Kept the last </span>$KEEP_SNAPSHOTS<span style=color:#e6db74> snapshots.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>        send_telegram <span style=color:#e6db74>&#34;🧹 Cleanup completed successfully at </span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span><span style=color:#e6db74>.
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🖥️ Hostname: </span>$HOSTNAME<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🌐 IP Address: </span>$IP_ADDRESS<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>💾 Repository: </span>$RESTIC_REPOSITORY<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>Kept the last </span>$KEEP_SNAPSHOTS<span style=color:#e6db74> snapshots.
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🤖 Repository Stats: 
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74></span>$stats_output<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>else</span>
+</span></span><span style=display:flex><span>        echo <span style=color:#e6db74>&#34;Cleanup failed at </span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span><span style=color:#e6db74>, see log for details.&#34;</span> &gt;&gt; <span style=color:#e6db74>&#34;</span>$LOG_FILE<span style=color:#e6db74>&#34;</span>
+</span></span><span style=display:flex><span>        send_telegram <span style=color:#e6db74>&#34;❌ Cleanup failed at </span><span style=color:#66d9ef>$(</span>date +<span style=color:#e6db74>&#34;%Y-%m-%d %H:%M:%S&#34;</span><span style=color:#66d9ef>)</span><span style=color:#e6db74>.
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🖥️ Hostname: </span>$HOSTNAME<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>🌐 IP Address: </span>$IP_ADDRESS<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>💾 Repository: </span>$RESTIC_REPOSITORY<span style=color:#e6db74>
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>Check log </span>$LOG_FILE<span style=color:#e6db74> for details.&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>fi</span>
+</span></span><span style=display:flex><span><span style=color:#f92672>}</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>cleanup_snapshots
+</span></span></code></pre></div><p>赋予脚本执行权限：<code>chmod +x /path/to/restic_cleanup.sh</code>。</p><h4 id=步骤-4-配置定时任务>步骤 4: 配置定时任务</h4><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span>crontab -e
+</span></span></code></pre></div><p>在编辑器中，添加一行以定义新的计划任务。以下是一些常见的时间设置示例：</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span><span style=color:#75715e># 每个月的第二天的凌晨 2 点 1 分执行</span>
 </span></span><span style=display:flex><span>
 </span></span><span style=display:flex><span><span style=color:#ae81ff>0</span> <span style=color:#ae81ff>2</span> <span style=color:#ae81ff>1</span> * * /bin/bash /path/to/your_backup_script.sh &gt;&gt; /path/to/backup_cron.log 2&gt;&amp;<span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#75715e># 每3个月执行一次清理</span>
+</span></span><span style=display:flex><span><span style=color:#ae81ff>0</span> <span style=color:#ae81ff>2</span> <span style=color:#ae81ff>1</span> */3 * /bin/bash /path/to/restic_cleanup.sh &gt;&gt; /path/to/cleanup_cron.log 2&gt;&amp;<span style=color:#ae81ff>1</span>
 </span></span></code></pre></div><p>运行 <code>crontab -l</code> 来列出所有已经安排的 <code>cron</code> 作业，确保的备份任务已经被正确添加。</p></div></div><div class=article-paging><section class="post-paging--item card-container content-padding-primary soft-size--primary soft-style--box"><div class=card-cover background-image-lazy data-img=https://cdn.jsdelivr.net/gh/2cracer2/oss@master/uPic/port-knock.jpg></div><div class=card-text><a href=/posts/202403010045/><h4 class="card-text--title text-ellipsis">Port Knocking 端口敲门✊</h4></a><p class=card-text--row>2024-03-01 00:45</p></div></section></div></div><aside class=widget-info><section class="aside-widget widget-author content-padding-large soft-size--large soft-style--box"><div class=widget-body><div class="author-box avatar"><img class="author-avatar soft-size--round soft-style--box" src=https://cdn.jsdelivr.net/gh/2cracer2/oss@master/uPic/iol.svg alt=Ecrose><h2 class="author-name text-ellipsis">Ecrose</h2><p class="author-desc text-ellipsis">尽心尽力，自有万里长风。</p></div></div></section><section class="aside-widget widget-articles content-padding-large soft-size--large soft-style--box"><h2 class=widget-header><div class=title><span>Related Posts</span></div></h2><div class=widget-body><ul class=post-list><li class=post-item><a href=/posts/202403010045/>Port Knocking 端口敲门✊</a></li><li class=post-item><a href=/posts/202312102332/>DALLE 教程</a></li><li class=post-item><a href=/posts/202311062332/>mac-mini 折腾</a></li><li class=post-item><a href=/posts/202304202032/>数据备份方案</a></li><li class=post-item><a href=/posts/202205120045/>命令行的艺术</a></li></ul></div></section><section class="aside-widget widget-categories content-padding-large soft-size--large soft-style--box"><h2 class=widget-header><div class=title><span>Categories</span></div></h2><div class=widget-body><ul class=categories-list><li><a href=/categories/%E6%9D%82%E6%8A%80%E6%B5%85%E5%B0%9D/>杂技浅尝</a>
 <span>8</span></li><li><a href=/categories/%E6%8A%80%E6%9C%AF/>技术</a>
 <span>2</span></li><li><a href=/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/>数据库</a>
